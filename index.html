@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SD Forge Template Extractor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            surface: { DEFAULT: '#1a1b26', light: '#24283b', border: '#3b4261' },
+            accent: { DEFAULT: '#7aa2f7', hover: '#89b4fa', muted: '#565f89' },
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    textarea { field-sizing: content; min-height: 12rem; }
+    @supports not (field-sizing: content) {
+      textarea { min-height: 12rem; }
+    }
+    .copy-btn.copied { background-color: #9ece6a; color: #1a1b26; }
+  </style>
+</head>
+<body class="min-h-screen bg-surface text-gray-100 antialiased">
+
+  <header class="border-b border-surface-border bg-surface-light/60 backdrop-blur-sm">
+    <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6">
+      <div class="flex items-start gap-4">
+        <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-accent/15 text-2xl" aria-hidden="true">✦</div>
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight text-white sm:text-3xl">
+            SD Forge Template Extractor
+          </h1>
+          <p class="mt-2 max-w-2xl text-sm leading-relaxed text-gray-400 sm:text-base">
+            Stable Diffusion WebUI Forge のグリッド画像メタデータから
+            <code class="rounded bg-surface px-1.5 py-0.5 text-accent">Template</code> と
+            <code class="rounded bg-surface px-1.5 py-0.5 text-accent">Negative Template</code>
+            を抽出し、改行を復元して整形します。
+          </p>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-5xl px-4 py-8 sm:px-6">
+    <div class="space-y-8">
+
+      <!-- Input -->
+      <section>
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <label for="raw-input" class="text-sm font-semibold text-gray-200">
+            整形前のメタデータ (Raw Parameters)
+          </label>
+          <div class="flex gap-2">
+            <button
+              id="clear-btn"
+              type="button"
+              class="rounded-lg border border-surface-border px-3 py-1.5 text-xs font-medium text-gray-400 transition hover:border-accent-muted hover:text-gray-200"
+            >
+              クリア
+            </button>
+            <button
+              id="parse-btn"
+              type="button"
+              class="rounded-lg bg-accent px-4 py-1.5 text-xs font-semibold text-surface transition hover:bg-accent-hover"
+            >
+              変換
+            </button>
+          </div>
+        </div>
+        <textarea
+          id="raw-input"
+          class="w-full resize-y rounded-xl border border-surface-border bg-surface-light p-4 font-mono text-sm leading-relaxed text-gray-200 placeholder-gray-500 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/20"
+          placeholder="メタデータをここに貼り付けてください..."
+          spellcheck="false"
+        ></textarea>
+        <p id="status" class="mt-2 text-xs text-gray-500" aria-live="polite"></p>
+      </section>
+
+      <!-- Output: Template -->
+      <section>
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <label for="template-output" class="text-sm font-semibold text-gray-200">
+            抽出・整形後のプロンプト (Template)
+          </label>
+          <button
+            id="copy-template-btn"
+            type="button"
+            class="copy-btn rounded-lg border border-surface-border px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent hover:text-accent"
+            data-target="template-output"
+          >
+            コピー
+          </button>
+        </div>
+        <textarea
+          id="template-output"
+          class="w-full resize-y rounded-xl border border-surface-border bg-surface p-4 font-mono text-sm leading-relaxed text-gray-300 outline-none"
+          readonly
+          spellcheck="false"
+        ></textarea>
+      </section>
+
+      <!-- Output: Negative Template -->
+      <section>
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <label for="negative-output" class="text-sm font-semibold text-gray-200">
+            抽出・整形後のネガティブプロンプト (Negative Template)
+          </label>
+          <button
+            id="copy-negative-btn"
+            type="button"
+            class="copy-btn rounded-lg border border-surface-border px-3 py-1.5 text-xs font-medium text-gray-300 transition hover:border-accent hover:text-accent"
+            data-target="negative-output"
+          >
+            コピー
+          </button>
+        </div>
+        <textarea
+          id="negative-output"
+          class="w-full resize-y rounded-xl border border-surface-border bg-surface p-4 font-mono text-sm leading-relaxed text-gray-300 outline-none"
+          readonly
+          spellcheck="false"
+        ></textarea>
+      </section>
+
+    </div>
+  </main>
+
+  <footer class="mx-auto max-w-5xl px-4 pb-10 sm:px-6">
+    <p class="text-center text-xs text-gray-600">
+      sd-dynamic-prompts 等でワイルドカードが置換される前の元テンプレートを復元します
+    </p>
+  </footer>
+
+  <script>
+    const NOT_FOUND = '該当データなし';
+
+    /**
+     * メタデータ文字列から "Label: \"...\"" 形式の値を抽出し、エスケープをデコードする。
+     * @param {string} text - 入力メタデータ全文
+     * @param {string} label - ラベル名（例: "Template", "Negative Template"）
+     * @returns {string|null} デコード済み文字列。見つからない場合は null
+     */
+    function extractQuotedValue(text, label) {
+      const prefix = label + ': "';
+      const startIndex = text.indexOf(prefix);
+      if (startIndex === -1) return null;
+
+      let i = startIndex + prefix.length;
+      let result = '';
+
+      while (i < text.length) {
+        const char = text[i];
+
+        if (char === '\\' && i + 1 < text.length) {
+          const next = text[i + 1];
+          switch (next) {
+            case 'n':
+              result += '\n';
+              i += 2;
+              break;
+            case '"':
+              result += '"';
+              i += 2;
+              break;
+            case '\\':
+              result += '\\';
+              i += 2;
+              break;
+            case 't':
+              result += '\t';
+              i += 2;
+              break;
+            default:
+              result += char + next;
+              i += 2;
+              break;
+          }
+        } else if (char === '"') {
+          break;
+        } else {
+          result += char;
+          i += 1;
+        }
+      }
+
+      return result;
+    }
+
+    function parseMetadata(raw) {
+      if (!raw.trim()) {
+        return { template: '', negative: '', status: '' };
+      }
+
+      const template = extractQuotedValue(raw, 'Template');
+      const negative = extractQuotedValue(raw, 'Negative Template');
+
+      const hasTemplate = template !== null;
+      const hasNegative = negative !== null;
+
+      let status = '';
+      if (!hasTemplate && !hasNegative) {
+        status = 'Template / Negative Template が見つかりませんでした';
+      } else if (!hasTemplate) {
+        status = 'Template が見つかりませんでした';
+      } else if (!hasNegative) {
+        status = 'Negative Template が見つかりませんでした';
+      } else {
+        status = '抽出完了';
+      }
+
+      return {
+        template: hasTemplate ? template : (raw.trim() ? NOT_FOUND : ''),
+        negative: hasNegative ? negative : (raw.trim() ? NOT_FOUND : ''),
+        status,
+      };
+    }
+
+    function autoResize(textarea) {
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.max(textarea.scrollHeight, 192) + 'px';
+    }
+
+    const rawInput = document.getElementById('raw-input');
+    const templateOutput = document.getElementById('template-output');
+    const negativeOutput = document.getElementById('negative-output');
+    const statusEl = document.getElementById('status');
+    const parseBtn = document.getElementById('parse-btn');
+    const clearBtn = document.getElementById('clear-btn');
+
+    function runParse() {
+      const { template, negative, status } = parseMetadata(rawInput.value);
+      templateOutput.value = template;
+      negativeOutput.value = negative;
+      statusEl.textContent = status;
+      autoResize(templateOutput);
+      autoResize(negativeOutput);
+    }
+
+    rawInput.addEventListener('input', runParse);
+    parseBtn.addEventListener('click', runParse);
+
+    clearBtn.addEventListener('click', () => {
+      rawInput.value = '';
+      templateOutput.value = '';
+      negativeOutput.value = '';
+      statusEl.textContent = '';
+      rawInput.focus();
+    });
+
+    async function copyToClipboard(button) {
+      const targetId = button.dataset.target;
+      const textarea = document.getElementById(targetId);
+      const text = textarea.value;
+
+      if (!text || text === NOT_FOUND) return;
+
+      try {
+        await navigator.clipboard.writeText(text);
+        const original = button.textContent;
+        button.textContent = 'コピー済み';
+        button.classList.add('copied');
+        setTimeout(() => {
+          button.textContent = original;
+          button.classList.remove('copied');
+        }, 2000);
+      } catch {
+        textarea.select();
+        document.execCommand('copy');
+        button.textContent = 'コピー済み';
+        setTimeout(() => { button.textContent = 'コピー'; }, 2000);
+      }
+    }
+
+    document.querySelectorAll('.copy-btn').forEach((btn) => {
+      btn.addEventListener('click', () => copyToClipboard(btn));
+    });
+  </script>
+</body>
+</html>
